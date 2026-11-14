@@ -1,0 +1,71 @@
+name: Refresh launcher manifest
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - launcher-manifest.json
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: launcher-manifest-main
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate complete file manifest
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const entries = cp.execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD'], {encoding:'buffer'})
+            .toString('utf8').split('\0').filter(Boolean);
+          const files = [];
+          for (const entry of entries) {
+            const tab = entry.indexOf('\t');
+            if (tab < 0) continue;
+            const meta = entry.slice(0, tab).split(' ');
+            const path = entry.slice(tab + 1);
+            if (meta[1] !== 'blob') continue;
+            let size = 0;
+            try { size = fs.statSync(path).size; } catch {}
+            files.push({path, sha: meta[2], size});
+          }
+          files.sort((a,b) => a.path.localeCompare(b.path));
+          const manifest = {
+            schema: 1,
+            repository: 'jacehawkins16-svg/educational-learning-by-suki',
+            branch: 'main',
+            commit: cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
+            generatedAt: new Date().toISOString(),
+            files
+          };
+          fs.writeFileSync('launcher-manifest.json', JSON.stringify(manifest));
+          console.log('Generated manifest for', files.length, 'files');
+          NODE
+
+      - name: Commit manifest if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add launcher-manifest.json
+          if git diff --cached --quiet; then
+            echo "Manifest is already current."
+          else
+            git commit -m "chore: refresh launcher file manifest"
+            git push origin HEAD:main
+          fi
